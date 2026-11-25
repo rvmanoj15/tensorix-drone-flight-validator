@@ -1,0 +1,24 @@
+{
+  "name": "tensorix-drone-flight-validator",
+  "version": "1.0.0",
+  "description": "AVISHKAR’26 | Team TENSORIX | Team ID AV26-F36B19EA08 | Problem 24: Drone Flight Plan Validator with Airspace Zone Rules",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rvmanoj15/tensorix-drone-flight-validator.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/rvmanoj15/tensorix-drone-flight-validator/issues"
+  },
+  "homepage": "https://github.com/rvmanoj15/tensorix-drone-flight-validator#readme",
+  "dependencies": {
+    "express": "^5.3.0"
+  }
+}
