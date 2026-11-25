@@ -181,3 +181,6 @@ app.use((err, req, res, next) => {
 app.listen(3000, "127.0.0.1", () => {
   console.log("Open http://127.0.0.1:3000 in Chrome");
 });
+app.get("/planner", (req, res) => {
+  res.sendFile(path.join(__dirname, "planner.html"));
+});

@@ -1,0 +1,71 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TENSORIX · Flight planner</title>
+<link rel="stylesheet" href="/leaflet/leaflet.css"><style>
+*{box-sizing:border-box}body{margin:0;font:16px/1.4 system-ui,sans-serif;background:#eff4f1;color:#153a35}header{background:#153a35;color:#fff;padding:15px 5%;display:flex;align-items:center;justify-content:space-between}header strong{letter-spacing:.16em}main{max-width:1240px;padding:22px;margin:auto}h1{font-size:clamp(26px,4vw,42px);letter-spacing:-.04em}h1,h2,p{margin:0 0 12px}h2{font-size:20px}.cards{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(280px,1fr);gap:16px}.card{border:1px solid #c6d4cd;background:white;padding:20px;border-radius:12px;margin-bottom:14px}#login{max-width:450px;margin:8vh auto}#map{height:clamp(340px,55vh,600px);border-radius:8px;background-color:#e7eee8;background-image:linear-gradient(#d6e0d7 1px,transparent 1px),linear-gradient(90deg,#d6e0d7 1px,transparent 1px);background-size:32px 32px}button,input,select{font:inherit;padding:8px;border:1px solid #97afa4;border-radius:6px}button{cursor:pointer;background:#fff;color:#183b31;margin:3px 2px}button.primary{background:#16604d;color:white}button:disabled{opacity:.5}input,select{width:100%}label{display:block;margin:8px 0}#notice{color:#95330e}#verdict{white-space:pre-line;border-left:4px solid #307867;padding-left:12px}small{color:#426052}a{color:#006553}ul{padding-left:20px}li{margin:5px 0}[hidden]{display:none!important}@media(max-width:760px){.cards{display:block}main{padding:12px}}
+</style></head><body><header><strong>TENSORIX</strong><span id="identity">AVISHKAR ’26</span></header><main>
+<section class="card" id="login"><h1>Flight planner</h1><p>Sign in to the synthetic airspace demo.</p><form id="auth"><label>Account<select id="role"><option>pilot</option><option>admin</option></select></label><label>Password from the server window<input id="password" type="password" required autocomplete="current-password"></label><button class="primary">Sign in</button></form></section><p id="notice" role="alert"></p>
+<section id="workspace" hidden><h1>Flight plan validator</h1><p>Synthetic airspace · <span id="version"></span> <button id="logout">Sign out</button></p>
+<div class="cards"><section class="card"><h2>Airspace map</h2><p id="hint"></p><div id="map"></div><small>Local grid in metres. Dashed outlines show the centre of a distance buffer; the translucent band extends to its outer edge.</small><ul id="legend"></ul></section>
+<div><section class="card"><h2>Pilot plan</h2><button id="demo">Load A–B demo</button><button id="draw">Draw new route</button><button id="undo">Undo point</button><label>Altitude (m)<input id="alt" type="number" min="0" step="any" value="90"></label><button class="primary" id="validate">Validate route</button><button id="apply" hidden>Apply suggestion and recheck</button><p id="verdict" aria-live="polite"></p><a id="pdf" hidden>Download demo permit PDF</a></section>
+<section class="card" id="admin" hidden><h2>Zone editor</h2><label>Existing zone<select id="existing"></select></label><button id="edit">Edit selected</button><button id="newzone">Draw new zone</button><label>Zone ID<input id="zoneId" maxlength="24"></label><label>Colour<select id="color"><option>Green</option><option>Yellow</option><option>Red</option></select></label><label>Altitude threshold (m)<input id="limit" type="number" min="0" step="any" value="60"></label><label>Distance buffer (m)<input id="buffer" type="number" min="0" max="5000" step="any" value="0"></label><button id="redraw">Redraw boundary</button><button id="save" class="primary">Save zone</button><button id="del">Delete selected</button></section>
+<section class="card"><h2>Saved checks</h2><ul id="history"></ul></section></div></div></section></main>
+<script src="/leaflet/leaflet.js"></script><script>
+const $=id=>document.getElementById(id);
+const palette={Green:'#217548',Yellow:'#bf8700',Red:'#aa3042'};
+let map,state,zones,overlay,route=[],corners=[],mode='pilot',rev=0,suggestion=null;
+async function api(name,body){
+ const opt=body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)};
+ const res=await fetch('/api/'+name,opt),data=await res.json();if(!res.ok)throw Error(data.error||'Request failed.');return data;
+}
+function action(id,fn){$(id).onclick=async()=>{$('notice').textContent='';try{await fn();}catch(e){$('notice').textContent=e.message;}};}
+function clearVerdict(){rev++;suggestion=null;$('apply').hidden=true;$('pdf').hidden=true;$('verdict').textContent='';}
+const latlng=([x,y])=>[y,x];
+function sketch(){
+ overlay.clearLayers();const r=route.map(latlng);L.polyline(r,{color:'#1653a0',weight:4,interactive:false}).addTo(overlay);
+ r.forEach((p,i)=>L.circleMarker(p,{radius:4,interactive:false}).bindTooltip(String(i+1),{permanent:true,direction:'top'}).addTo(overlay));
+ if(corners.length)L.polygon(corners.map(latlng),{color:'#674589',dashArray:'4 4',interactive:false}).addTo(overlay);
+ $('hint').textContent=mode==='pilot'?'Click to add waypoints in flight order. '+route.length+' selected.':'Click polygon corners in order. '+corners.length+' selected.';
+ $('validate').disabled=mode!=='pilot'||route.length<2;
+}
+function drawZones(){
+ zones.clearLayers();
+ for(const z of state.zones){
+  const ring=z.polygon.map(latlng),color=palette[z.color];
+  if(z.buffer>0)L.polyline(ring,{color,weight:2*z.buffer*map.getZoomScale(map.getZoom(),0),opacity:.2,lineJoin:'round',interactive:false}).addTo(zones);
+  L.polygon(ring,{color,weight:2,dashArray:z.buffer?'5 3':null,fillOpacity:.32,interactive:false}).bindTooltip(z.id,{permanent:true,direction:'center'}).addTo(zones);
+ }
+}
+async function refresh(fit=false){
+ state=await api('state');$('login').hidden=true;$('workspace').hidden=false;$('admin').hidden=state.role!=='admin';$('identity').textContent=state.role;$('version').textContent='Rule version '+state.version;
+ if(!map){
+  map=L.map('map',{crs:L.CRS.Simple,minZoom:-5,maxZoom:4,doubleClickZoom:false}).setView([200,200],0);
+  zones=L.layerGroup().addTo(map);overlay=L.layerGroup().addTo(map);
+  map.on('click',e=>{(mode==='pilot'?route:corners).push([+e.latlng.lng.toFixed(2),+e.latlng.lat.toFixed(2)]);clearVerdict();sketch();});
+  map.on('zoomend',drawZones);
+ }
+ if(fit){map.invalidateSize();const b=L.latLngBounds(state.sample.map(latlng));state.zones.forEach(z=>z.polygon.forEach(p=>b.extend(latlng(p))));map.fitBounds(b,{padding:[28,28]});}
+ drawZones();sketch();
+ $('legend').replaceChildren(...state.zones.map(z=>{const li=document.createElement('li');li.textContent=z.id+' · '+z.color+' · '+(z.color==='Red'?'flight prohibited':(z.color==='Yellow'?'below ':'up to ')+z.limit+' m')+' · buffer '+z.buffer+' m';return li;}));
+ $('existing').replaceChildren(...state.zones.map(z=>new Option(z.id,z.id)));
+ $('history').replaceChildren(...state.history.map(p=>{const li=document.createElement('li');li.textContent='#'+p.id+' · '+p.verdict+' · '+p.altitude+' m · rules v'+p.version+' ';if(p.verdict==='Approve'){const a=document.createElement('a');a.href='/api/permit/'+p.id;a.textContent='PDF';li.append(a);}return li;}));
+}
+function pilot(){mode='pilot';corners=[];clearVerdict();}
+action('demo',()=>{pilot();route=state.sample.map(p=>p.slice());sketch();});
+action('draw',()=>{pilot();route=[];sketch();});
+action('undo',()=>{(mode==='pilot'?route:corners).pop();clearVerdict();sketch();});
+$('alt').oninput=clearVerdict;
+async function validate(){
+ const altitude=$('alt').valueAsNumber;if(!Number.isFinite(altitude)||altitude<0)throw Error('Enter a valid altitude.');
+ clearVerdict();const initial=rev,r=await api('validate-route',{points:route,altitude,version:state.version});if(initial!==rev)return;
+ suggestion=r.suggestion;$('verdict').textContent=[r.verdict+' · plan #'+r.id+' · rules v'+r.version,r.reason,...r.hits.map(h=>h.id+' · segments '+h.segments.join(', ')),suggestion===null?'':'Suggested altitude: '+suggestion+' m'].filter(Boolean).join('\n');
+ $('apply').hidden=suggestion===null;$('pdf').hidden=r.verdict!=='Approve';$('pdf').href='/api/permit/'+r.id;await refresh();
+}
+action('validate',validate);action('apply',async()=>{if(suggestion!==null){$('alt').value=suggestion;await validate();}});
+action('newzone',()=>{mode='create';corners=[];$('zoneId').readOnly=false;$('zoneId').value='';$('buffer').value=0;clearVerdict();sketch();});
+action('edit',()=>{const z=state.zones.find(z=>z.id===$('existing').value);if(!z)throw Error('Select a zone.');mode='edit';corners=z.polygon.slice(0,-1);$('zoneId').value=z.id;$('zoneId').readOnly=true;$('color').value=z.color;$('limit').value=z.limit??'';$('buffer').value=z.buffer;clearVerdict();sketch();});
+action('redraw',()=>{if(mode==='pilot')throw Error('Choose edit or new zone first.');corners=[];sketch();});
+action('save',async()=>{if(mode==='pilot'||corners.length<3)throw Error('Draw or select a polygon with at least three corners.');await api('zones',{action:mode,version:state.version,zone:{id:$('zoneId').value.trim(),color:$('color').value,limit:$('limit').valueAsNumber,buffer:$('buffer').valueAsNumber,polygon:[...corners,corners[0]]}});pilot();await refresh();$('notice').textContent='Saved rule version '+state.version+'.';});
+action('del',async()=>{const id=$('existing').value;if(!id||!confirm('Remove '+id+' from the next rule version?'))return;await api('zones',{action:'delete',id,version:state.version});pilot();await refresh();});
+$('auth').onsubmit=async e=>{e.preventDefault();try{await api('login',{role:$('role').value,password:$('password').value});$('password').value='';$('notice').textContent='';await refresh(true);$('demo').click();}catch(err){$('notice').textContent=err.message;}};
+action('logout',async()=>{await api('logout',{});location.reload();});
+refresh(true).then(()=>$('demo').click()).catch(e=>{if(e.message!=='Sign in to continue.')$('notice').textContent=e.message;});
+</script></body></html>

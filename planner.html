@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TENSORIX Pilot Planner</title>
+  <link rel="stylesheet" href="/leaflet/leaflet.css">
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 800px; margin: 24px auto; padding: 0 16px; }
+    #map { height: 340px; background: #eef3f6; margin-bottom: 16px; }
+    input, button { font: inherit; padding: 6px; }
+    #result { font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>Pilot flight planner</h1>
+  <p>Click the map to add points in flight order. The yellow square is demo zone Y1.</p>
+  <div id="map"></div>
+
+  <form id="flight-form">
+    <label>Altitude in metres
+      <input id="altitude" type="number" min="0" step="any" value="60" required>
+    </label>
+    <button id="validate" disabled>Validate route</button>
+    <button id="clear" type="button">Clear route</button>
+  </form>
+  <p id="result" aria-live="polite">Loading the zone…</p>
+
+  <script src="/leaflet/leaflet.js"></script>
+  <script>
+    async function startPlanner() {
+      const result = document.getElementById("result");
+      const altitude = document.getElementById("altitude");
+      const validate = document.getElementById("validate");
+
+      const response = await fetch("/api/demo-map");
+      if (!response.ok) throw new Error("Could not load zone Y1.");
+      const { yellowZone, route } = await response.json();
+
+      const map = L.map("map", { doubleClickZoom: false });
+      const zone = L.geoJSON(yellowZone, {
+        style: { color: "#946200", fillColor: "#ffd54f", fillOpacity: 0.6 }
+      }).addTo(map);
+
+      // Use the demo route only to set the opening view.
+      map.fitBounds(zone.getBounds().extend(L.geoJSON(route).getBounds()), {
+        padding: [35, 35]
+      });
+
+      const points = [];
+      const markers = L.layerGroup().addTo(map);
+      const line = L.polyline([], { color: "#185abc", weight: 4 }).addTo(map);
+      let revision = 0;
+
+      function updateStatus() {
+        revision++;
+        validate.disabled = points.length < 2;
+        result.textContent = points.length < 2
+          ? "Click " + (points.length === 0 ? "a starting point." : "a second point.")
+          : points.length + " points selected. Click another point or validate your route.";
+      }
+
+      map.on("click", (event) => {
+        const { lat, lng } = event.latlng;
+        points.push([lng, lat]); // The server expects longitude first.
+        line.addLatLng([lat, lng]);
+        L.circleMarker([lat, lng], { radius: 5, color: "#17345c" })
+          .bindTooltip(String(points.length), { permanent: true, direction: "top" })
+          .addTo(markers);
+        updateStatus();
+      });
+
+      document.getElementById("clear").onclick = () => {
+        points.length = 0;
+        markers.clearLayers();
+        line.setLatLngs([]);
+        updateStatus();
+      };
+
+      altitude.addEventListener("input", updateStatus);
+
+      document.getElementById("flight-form").onsubmit = async (event) => {
+        event.preventDefault();
+        const submittedRevision = ++revision;
+        result.textContent = "Checking your route…";
+
+        try {
+          const response = await fetch("/api/validate-route", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ points, altitude: altitude.valueAsNumber })
+          });
+          const data = await response.json();
+          if (submittedRevision !== revision) return;
+          if (!response.ok) throw new Error(data.error || "Validation failed.");
+
+          const segments = data.crossingSegments.length
+            ? " Y1 intersects segment(s): " + data.crossingSegments.join(", ") + "."
+            : "";
+          const suggestion = data.suggestedAltitude === null
+            ? ""
+            : " Try " + data.suggestedAltitude + " m.";
+
+          result.textContent = data.verdict + ". " + data.reason + segments + suggestion;
+        } catch (error) {
+          if (submittedRevision === revision) result.textContent = error.message;
+        }
+      };
+
+      updateStatus();
+    }
+
+    startPlanner().catch(() => {
+      document.getElementById("result").textContent =
+        "Could not load the planner. Check that the local server is running.";
+    });
+  </script>
+</body>
+</html>
